@@ -1,0 +1,10 @@
+# Biến môi trường thật của máy local (chép từ .env.example)
+.env
+.env.*
+!.env.example
+# File tạm của hệ điều hành / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

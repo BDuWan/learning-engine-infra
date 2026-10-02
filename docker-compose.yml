@@ -1,0 +1,131 @@
+# Stack local của Personal AI Learning Engine — chạy từ code đang checkout ở các repo anh em (../learning-engine-*).
+# Không chứa product code. Image build tại chỗ, tag `<repo>:local`.
+# Quy tắc ghi song song (docs/24-code-organization.md): append-block — mỗi phase sửa trong khối có comment Phase ID.
+# Lúc gen blueprint (2026-10-03) các product repo CHƯA có Dockerfile: MAIN-FND-01 tạo Dockerfile backend + web,
+# MAIN-AIO-01 tạo build/agent-runner/Dockerfile. Service agent-runner nằm trong profile `ai` để stack chạy được trước AIO-01.
+# Quy ước image backend (MAIN-FND-01 hiện thực): binary /app/api, /app/worker, /app/migrate; image runner: /app/agent-runner.
+
+name: learning-engine
+
+# --- BLUEPRINT begin ---
+x-backend-env: &backend-env
+  env_file:
+    - path: .env
+      required: false
+
+services:
+  postgres:
+    image: postgres:18.6
+    environment:
+      POSTGRES_USER: learning_engine_owner
+      POSTGRES_PASSWORD: ${LEARNING_ENGINE_POSTGRES_OWNER_PASSWORD:-dev-only-change-me-owner}
+      POSTGRES_DB: learning_engine_dev
+      LEARNING_ENGINE_POSTGRES_APP_PASSWORD: ${LEARNING_ENGINE_POSTGRES_APP_PASSWORD:-dev-only-change-me-app}
+    ports:
+      - "${LEARNING_ENGINE_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U learning_engine_owner -d learning_engine_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  garage:
+    image: dxflrs/garage:v2.4.1
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:-00000000000000000000000000000000000000000000000000000000000000aa}
+      GARAGE_DEFAULT_ACCESS_KEY: ${LEARNING_ENGINE_S3_ACCESS_KEY:-GK000000000000000000000001}
+      GARAGE_DEFAULT_SECRET_KEY: ${LEARNING_ENGINE_S3_SECRET_KEY:-0000000000000000000000000000000000000000000000000000000000000001}
+      GARAGE_DEFAULT_BUCKET: ${LEARNING_ENGINE_S3_BUCKET:-learning-engine-content}
+    ports:
+      - "${LEARNING_ENGINE_S3_PORT:-3900}:3900"
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garage-data:/var/lib/garage
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    <<: *backend-env
+    image: learning-engine-backend:local
+    build:
+      context: ../learning-engine-backend
+      dockerfile: Dockerfile
+    command: ["/app/migrate", "up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *backend-env
+    image: learning-engine-backend:local
+    command: ["/app/api"]
+    ports:
+      - "${LEARNING_ENGINE_API_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      garage:
+        condition: service_healthy
+
+  worker:
+    <<: *backend-env
+    image: learning-engine-backend:local
+    command: ["/app/worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  agent-runner:
+    <<: *backend-env
+    profiles: ["ai"]
+    image: learning-engine-agent-runner:local
+    build:
+      context: ../learning-engine-backend
+      dockerfile: build/agent-runner/Dockerfile
+    # NFR-05/NFR-06: container riêng, không root, rootfs chỉ đọc, KHÔNG mount Docker socket, giới hạn tài nguyên.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 2
+    mem_limit: 4g
+    pids_limit: 512
+    volumes:
+      - runner-vault:/vault
+      - runner-work:/work
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    image: learning-engine-web:local
+    build:
+      context: ../learning-engine-web
+      dockerfile: Dockerfile
+    environment:
+      LEARNING_ENGINE_API_INTERNAL_URL: ${LEARNING_ENGINE_API_INTERNAL_URL:-http://api:8080}
+      LEARNING_ENGINE_ENV: ${LEARNING_ENGINE_ENV:-dev}
+    ports:
+      - "${LEARNING_ENGINE_WEB_PORT:-3000}:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+    name: learning-engine-postgres-data
+  garage-data:
+    name: learning-engine-garage-data
+  runner-vault:
+    name: learning-engine-runner-vault
+  runner-work:
+    name: learning-engine-runner-work
+# --- BLUEPRINT end ---

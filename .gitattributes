@@ -1,0 +1,8 @@
+# Chuẩn hoá LF cho mọi file văn bản (Makefile và shell script phải là LF để chạy được trong Git Bash)
+* text=auto eol=lf
+*.sh text eol=lf
+Makefile text eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
+*.webp binary
