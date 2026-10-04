@@ -105,6 +105,17 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    # MAIN-AIO-01 begin
+    # Stop signal: the runner checkpoints running tasks (runner_shutdown) before exiting, so give it time.
+    stop_grace_period: 45s
+    # The runner opens no HTTP port; the check passes while the heartbeat to Postgres keeps succeeding.
+    healthcheck:
+      test: ["CMD", "/app/agent-runner", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    # MAIN-AIO-01 end
 
   web:
     image: learning-engine-web:local
